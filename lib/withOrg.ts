@@ -1,4 +1,4 @@
-import { db } from "@/db";
+import { db } from "../db";
 import { eq, and, type SQL } from "drizzle-orm";
 import {
   tickets,
@@ -11,7 +11,7 @@ import {
   inboundEmails,
   agentRuns,
   users,
-} from "@/db/schema";
+} from "../db/schema";
 import type { PgTable, PgColumn } from "drizzle-orm/pg-core";
 
 // Every business table has organization_id. This map lets withOrg resolve the
