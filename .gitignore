@@ -1,0 +1,40 @@
+# dependencies
+/node_modules
+/.pnp
+.pnp.js
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc / OS
+.DS_Store
+Thumbs.db
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# env — ignore every .env* EXCEPT the committed example
+.env*
+!.env.example
+
+# typescript / test
+*.tsbuildinfo
+next-env.d.ts
+/coverage
+
+# uploaded files (local StorageProvider)
+/storage
+
+# sample PDFs (regenerable via scripts/make-sample-pdf.ts)
+sample*.pdf
+
+# local transformers.js model cache
+/.cache
+/models
