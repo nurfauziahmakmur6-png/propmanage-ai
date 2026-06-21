@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1782012769829,
+      "tag": "0000_concerned_eternity",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1782029514176,
+      "tag": "0001_concerned_hobgoblin",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1782029889066,
+      "tag": "0002_lyrical_vulcan",
+      "breakpoints": true
+    }
+  ]
+}

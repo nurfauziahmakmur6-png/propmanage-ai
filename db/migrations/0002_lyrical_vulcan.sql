@@ -1,0 +1,1 @@
+ALTER TABLE "documents" ADD COLUMN "updated_at" text DEFAULT now() NOT NULL;
