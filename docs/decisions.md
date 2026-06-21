@@ -207,3 +207,67 @@ the retrieval instruction is applied to queries only) and a local-filesystem sto
 backend. Swapping in OpenAI embeddings (1536-dim) or R2 later is an env change plus one
 class, with no call-site edits. The embedding dimension change drove migration `0001`,
 which drops the HNSW index, alters `embedding` to `vector(384)`, and recreates the index.
+
+---
+
+# Milestone 3 — RAG Query Decisions
+
+## Why hybrid retrieval + Reciprocal Rank Fusion
+
+Vector (dense) and keyword (sparse) search fail in opposite ways. Dense embeddings capture
+meaning, so they answer paraphrased questions ("keep the noise down" → "quiet hours") but
+blur exact tokens — names, clause numbers, amounts — and confuse near-duplicate passages.
+Keyword (`tsvector` full-text) nails exact terms but is blind to synonyms. Running both and
+fusing the ranked lists means a query is covered whether it hinges on meaning or on a
+literal term.
+
+Fusion uses **Reciprocal Rank Fusion** (`score = Σ 1/(k + rank)`, k=60) rather than blending
+raw scores. Cosine distances and `ts_rank` values are on incomparable scales; normalizing
+them is fiddly and brittle. RRF ignores magnitudes and uses only *rank position*, so the two
+retrievers combine without calibration. The k=60 constant (from the original RRF paper)
+damps the long tail so low-ranked items contribute little. A passage that both retrievers
+rank highly accumulates contributions from both and rises above one that only a single
+retriever returned — which is the behavior we want and what the RRF unit test pins.
+
+## Why a cross-encoder reranker
+
+RRF orders by rank agreement, not by how well a passage actually answers *this* question.
+A **cross-encoder** reads the query and passage *together* in one forward pass, so it models
+their interaction directly and is far more precise than the bi-encoder cosine score (which
+embeds query and passage independently). It is too expensive to run over the whole corpus,
+which is exactly why it sits at the end: cheap retrieval narrows thousands of chunks to ~30
+fused candidates, then the cross-encoder (`ms-marco-MiniLM-L-6-v2`, local, free) re-scores
+just those and we keep the top 5. This is the standard retrieve-then-rerank funnel.
+
+## The refusal threshold
+
+The cross-encoder score is sigmoided into [0, 1] and a chunk must clear
+`RAG_RERANK_THRESHOLD` (default **0.3**) to be used. If nothing clears it, the system returns
+"I couldn't find this in the documents." **without calling the LLM at all**. This is the
+primary guard against hallucination: with no relevant context, a model will happily invent a
+plausible answer, so the cheapest and safest move is not to ask it. Skipping the call also
+saves latency and tokens on unanswerable questions. The gate lives in a DB-free function
+(`composeAnswer`) so a unit test can prove the LLM is never invoked on refusal.
+
+## What the eval shows
+
+`scripts/eval-retrieval.ts` ingests 15 short policy notes across three properties — many of
+them near-duplicates (three "quiet hours" notes, three late-fee notes, etc.) — and scores 13
+questions at **chunk granularity** (§7.3): hit-rate@5 and MRR for the exact answer chunk.
+
+| config         | hit-rate@5 | MRR   |
+|----------------|-----------:|------:|
+| vector-only    |       1.00 | 0.962 |
+| keyword-only   |       1.00 | 0.900 |
+| hybrid+rerank  |       1.00 | 0.962 |
+
+Reading the numbers honestly: on this small, clean corpus dense retrieval is already strong,
+so **hybrid+rerank ties the best single retriever rather than beating it** — but it clearly
+beats keyword-only (which drops ~6 MRR points on paraphrased questions where only the
+property name matches) and, by construction, can never do worse than the stronger signal.
+That robustness is the point: you do not know in advance whether a given question is
+semantic or exact-term, and hybrid+rerank wins both cases without that knowledge. The gap
+widens on larger, noisier corpora and on exact-token queries (clause numbers, codes) where
+dense retrieval degrades — the regime this pipeline is built for. The eval is the instrument
+for detecting that, and is meant to be re-run whenever chunking, the embedding model, or
+fusion weights change.
