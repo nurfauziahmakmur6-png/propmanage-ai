@@ -3,6 +3,7 @@ import { getEmbeddingProvider } from "@/lib/embeddings";
 import { getReranker } from "@/lib/reranking";
 import { getLLMProvider, type LLMProvider } from "@/lib/llm";
 import { answerQuestion } from "@/lib/answer";
+import { logEvent, newRequestId } from "@/lib/log";
 
 // Transformers.js (embedder + reranker) needs the Node runtime.
 export const runtime = "nodejs";
@@ -33,16 +34,23 @@ export async function POST(req: Request) {
     chat: (opts) => getLLMProvider().chat(opts),
   };
 
+  const requestId = newRequestId();
   try {
     const result = await answerQuestion(
       question,
       { embeddingProvider: getEmbeddingProvider(), reranker: getReranker(), llm },
       { organizationId, propertyId }
     );
-    return NextResponse.json(result);
+    logEvent("kb.query", {
+      requestId,
+      usedFallback: result.usedFallback,
+      sources: result.sources.length,
+    });
+    return NextResponse.json(result, { headers: { "x-request-id": requestId } });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Query failed";
     const status = /API_KEY|not set/.test(message) ? 503 : 500;
+    logEvent("kb.query.error", { requestId, error: message });
     return NextResponse.json({ error: message }, { status });
   }
 }

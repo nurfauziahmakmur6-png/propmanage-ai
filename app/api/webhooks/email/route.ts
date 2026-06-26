@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { persistInboundEmail } from "@/lib/email/process";
 import { enqueueEmailProcessing } from "@/lib/queue/queues";
+import { logEvent, newRequestId } from "@/lib/log";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -32,10 +33,13 @@ export async function POST(req: Request) {
     to: body.to ? String(body.to) : null,
   });
 
+  const requestId = newRequestId();
   if (duplicate) {
+    logEvent("webhook.email.duplicate", { requestId, messageId, inboundEmailId });
     return NextResponse.json({ status: "duplicate", inboundEmailId });
   }
 
-  await enqueueEmailProcessing({ organizationId, inboundEmailId, messageId });
-  return NextResponse.json({ status: "accepted", inboundEmailId }, { status: 202 });
+  await enqueueEmailProcessing({ organizationId, inboundEmailId, messageId, requestId });
+  logEvent("webhook.email.accepted", { requestId, messageId, inboundEmailId });
+  return NextResponse.json({ status: "accepted", inboundEmailId, requestId }, { status: 202 });
 }

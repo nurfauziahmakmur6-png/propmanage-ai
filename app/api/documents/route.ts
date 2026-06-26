@@ -5,6 +5,7 @@ import { documents } from "@/db/schema";
 import { listDocumentsWithChunkCounts } from "@/lib/documents";
 import { getStorageProvider, documentStorageKey } from "@/lib/storage";
 import { enqueueIngestion } from "@/lib/queue/queues";
+import { logEvent, newRequestId } from "@/lib/log";
 
 // bullmq/ioredis and fs require the Node.js runtime, not edge.
 export const runtime = "nodejs";
@@ -58,8 +59,11 @@ export async function POST(req: Request) {
     status: "pending",
   });
 
-  // Deterministic job id makes a double-submit a no-op.
-  const result = await enqueueIngestion({ documentId, organizationId });
+  // Deterministic job id makes a double-submit a no-op. The requestId follows the document
+  // through the queue into the worker logs.
+  const requestId = newRequestId();
+  const result = await enqueueIngestion({ documentId, organizationId, requestId });
+  logEvent("upload.enqueued", { requestId, documentId, result });
 
   return NextResponse.json({ id: documentId, status: "pending", enqueue: result }, { status: 201 });
 }

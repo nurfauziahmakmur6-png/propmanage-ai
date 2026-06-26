@@ -30,6 +30,7 @@ export interface IngestionJobData {
   documentId: string;
   organizationId: string;
   phase?: "split" | "finalize";
+  requestId?: string; // correlation id threaded from the originating request
 }
 
 export interface EmbedBatchJobData {
@@ -48,12 +49,14 @@ export interface EmailJobData {
   organizationId: string;
   inboundEmailId: string;
   messageId: string;
+  requestId?: string;
 }
 
 export interface TriageJobData {
   organizationId: string;
   ticketId: string;
   triggeringMessageId: string;
+  requestId?: string;
 }
 
 type Queues = {

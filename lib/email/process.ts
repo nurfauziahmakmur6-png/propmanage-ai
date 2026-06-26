@@ -78,7 +78,8 @@ function deriveTitle(payload: { subject?: string | null; body?: string | null })
 export async function processInboundEmail(
   organizationId: string,
   inboundEmailId: string,
-  deps: ProcessEmailDeps
+  deps: ProcessEmailDeps,
+  requestId?: string
 ): Promise<ProcessEmailResult> {
   const [email] = await db
     .select()
@@ -152,6 +153,7 @@ export async function processInboundEmail(
     organizationId,
     ticketId: ticket.id,
     triggeringMessageId: message.id,
+    requestId,
   });
 
   return { status: "created", ticketId: ticket.id, triggeringMessageId: message.id };

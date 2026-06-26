@@ -45,7 +45,12 @@ export function createTriageWorkers(config: TriageWorkerConfig): TriageWorkerHan
   const emailWorker = new Worker<EmailJobData>(
     QUEUE_EMAIL,
     async (job: Job<EmailJobData>) =>
-      processInboundEmail(job.data.organizationId, job.data.inboundEmailId, { enqueueTriage }),
+      processInboundEmail(
+        job.data.organizationId,
+        job.data.inboundEmailId,
+        { enqueueTriage },
+        job.data.requestId
+      ),
     {
       connection: newConnection(),
       prefix,
@@ -81,19 +86,26 @@ export function createTriageWorkers(config: TriageWorkerConfig): TriageWorkerHan
   );
 
   emailWorker.on("failed", (job, err) =>
-    log("email.attempt.failed", { jobId: job?.id, error: err?.message })
+    log("email.attempt.failed", { jobId: job?.id, requestId: job?.data?.requestId, error: err?.message })
   );
-  emailWorker.on("completed", (job) => log("email.completed", { jobId: job.id }));
+  emailWorker.on("completed", (job) =>
+    log("email.completed", { jobId: job.id, requestId: job.data?.requestId })
+  );
   triageWorker.on("failed", (job, err) =>
     log("triage.attempt.failed", {
       jobId: job?.id,
+      requestId: job?.data?.requestId,
       ticketId: job?.data?.ticketId,
       attemptsMade: job?.attemptsMade,
       error: err?.message,
     })
   );
   triageWorker.on("completed", (job) =>
-    log("triage.completed", { jobId: job.id, ticketId: job.data?.ticketId })
+    log("triage.completed", {
+      jobId: job.id,
+      requestId: job.data?.requestId,
+      ticketId: job.data?.ticketId,
+    })
   );
 
   const emailEvents = new QueueEvents(QUEUE_EMAIL, { connection: newConnection(), prefix });

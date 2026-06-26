@@ -154,6 +154,7 @@ export function createWorkers(config: WorkerConfig): WorkerHandles {
     if (!job) return;
     log("ingestion.attempt.failed", {
       jobId: job.id,
+      requestId: job.data?.requestId,
       documentId: job.data?.documentId,
       attemptsMade: job.attemptsMade,
       error: err?.message,
@@ -174,7 +175,11 @@ export function createWorkers(config: WorkerConfig): WorkerHandles {
   });
 
   ingestionWorker.on("completed", (job) => {
-    log("ingestion.completed", { jobId: job.id, documentId: job.data?.documentId });
+    log("ingestion.completed", {
+      jobId: job.id,
+      requestId: job.data?.requestId,
+      documentId: job.data?.documentId,
+    });
   });
 
   embedWorker.on("failed", (job, err) => {
