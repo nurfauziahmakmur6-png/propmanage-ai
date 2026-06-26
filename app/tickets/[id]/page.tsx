@@ -1,11 +1,14 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { db } from "@/db";
-import { tickets, ticketMessages, properties, units, tenants, users } from "@/db/schema";
+import { tickets, ticketMessages, agentRuns, properties, units, tenants, users } from "@/db/schema";
 import { withOrgFilter } from "@/lib/withOrg";
-import { eq, and, asc } from "drizzle-orm";
+import { eq, desc, asc } from "drizzle-orm";
+import { TriagePanel, type Citation } from "./triage-panel";
 
 const DEMO_ORG_ID = process.env.DEMO_ORG_ID ?? "";
+
+export const dynamic = "force-dynamic";
 
 const STATUS_COLORS: Record<string, string> = {
   open: "bg-green-100 text-green-800",
@@ -43,6 +46,8 @@ export default async function TicketDetailPage({ params }: PageProps) {
       priority: tickets.priority,
       category: tickets.category,
       source: tickets.source,
+      escalatedAt: tickets.escalatedAt,
+      escalationReason: tickets.escalationReason,
       createdAt: tickets.createdAt,
       updatedAt: tickets.updatedAt,
       propertyName: properties.name,
@@ -63,24 +68,63 @@ export default async function TicketDetailPage({ params }: PageProps) {
 
   // Fetch messages — explicitly org-scoped even though ticket_id already identifies it,
   // so the org predicate is always present per the withOrg contract.
-  const messages = await db
+  const allMessages = await db
     .select({
       id: ticketMessages.id,
       body: ticketMessages.body,
       authorRole: ticketMessages.authorRole,
+      status: ticketMessages.status,
+      citations: ticketMessages.citations,
       createdAt: ticketMessages.createdAt,
       authorName: users.name,
     })
     .from(ticketMessages)
     .leftJoin(users, eq(ticketMessages.authorId, users.id))
-    .where(
-      withOrgFilter(
-        DEMO_ORG_ID,
-        ticketMessages,
-        eq(ticketMessages.ticketId, id)
-      )
-    )
+    .where(withOrgFilter(DEMO_ORG_ID, ticketMessages, eq(ticketMessages.ticketId, id)))
     .orderBy(asc(ticketMessages.createdAt));
+
+  // The AI draft is shown in the triage panel, not the message thread.
+  const draftRow = allMessages.find((m) => m.authorRole === "agent" && m.status === "draft");
+  const messages = allMessages.filter((m) => m.id !== draftRow?.id);
+
+  // Latest triage run for the agent-trace display.
+  const [latestRun] = await db
+    .select({
+      status: agentRuns.status,
+      toolCalls: agentRuns.toolCalls,
+      tokensUsed: agentRuns.tokensUsed,
+      latencyMs: agentRuns.latencyMs,
+      createdAt: agentRuns.createdAt,
+    })
+    .from(agentRuns)
+    .where(withOrgFilter(DEMO_ORG_ID, agentRuns, eq(agentRuns.ticketId, id)))
+    .orderBy(desc(agentRuns.createdAt))
+    .limit(1);
+
+  const draft = draftRow
+    ? {
+        id: draftRow.id,
+        body: draftRow.body,
+        citations: (draftRow.citations as Citation[]) ?? [],
+        createdAt: draftRow.createdAt,
+      }
+    : null;
+
+  const escalation = ticket.escalatedAt
+    ? { reason: ticket.escalationReason, at: ticket.escalatedAt }
+    : null;
+
+  const agentRun = latestRun
+    ? {
+        status: latestRun.status,
+        toolsCalled: Array.isArray(latestRun.toolCalls)
+          ? (latestRun.toolCalls as Array<{ name?: string }>).map((c) => c.name ?? "?")
+          : [],
+        tokensUsed: latestRun.tokensUsed,
+        latencyMs: latestRun.latencyMs,
+        createdAt: latestRun.createdAt,
+      }
+    : null;
 
   return (
     <div>
@@ -150,6 +194,16 @@ export default async function TicketDetailPage({ params }: PageProps) {
           </dd>
         </dl>
       </div>
+
+      {/* AI triage: draft reply, escalation, agent-run trace, and approve controls */}
+      {(draft || escalation || agentRun) && (
+        <TriagePanel
+          ticketId={ticket.id}
+          draft={draft}
+          escalation={escalation}
+          agentRun={agentRun}
+        />
+      )}
 
       {/* Message thread */}
       <h2 className="text-base font-semibold text-gray-800 mb-3">
