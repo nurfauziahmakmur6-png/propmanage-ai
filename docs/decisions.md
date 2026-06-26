@@ -335,3 +335,49 @@ ticket view surfaces a compact trace (tools → latency → tokens → status); 
 view will aggregate the same rows. In the live demo a routine question ran
 `search_knowledge_base → classify_ticket → draft_reply` in ~2.9s / ~1019 tokens, while a
 rent/legal message escalated in ~0.6s having called only `escalate_to_human`.
+
+---
+
+# Milestone 5 — Observability Decisions
+
+## What's measured, and why cost and latency are first-class
+
+The `/ops` view reads three sources, each answering a different operational question:
+
+- **Queue health** (BullMQ `getJobCounts` across all five queues:
+  waiting/active/completed/failed/delayed) — *is work flowing, and is anything piling up or
+  failing?* Queue counts are system-wide because BullMQ queues are shared infrastructure, not
+  per-tenant; everything else on the page is org-scoped via `withOrg`.
+- **Document pipeline** (counts by status + docs stuck in `processing` past the sweeper
+  timeout) — *is ingestion healthy, or are documents wedged?* The stuck query reuses the
+  exact predicate the sweeper acts on, so the page shows precisely what will be auto-recovered.
+- **Agent runs** (from `agent_runs`: totals by status, average latency, total + average
+  tokens, and a recent-runs table) — *what is the agent doing, how fast, and at what cost?*
+
+Cost and latency are surfaced as headline numbers because **LLM/embedding usage is the main
+variable cost of the system** — unlike CPU or storage, it scales directly with usage and can
+run away silently. `agent_runs.tokens_used` and `latency_ms` were captured per run from
+Milestone 4 precisely so this view is an aggregation, not new instrumentation. Making spend
+visible (and per-run attributable to a ticket and its tool calls) is what lets you reason
+about unit economics before scaling the agent.
+
+## Guarded ops actions
+
+Two manual recovery actions, both deliberately constrained:
+
+- **Re-enqueue a document** — org-scoped (the document must belong to the caller's org, so the
+  action can't touch another tenant) and idempotent via the deterministic ingestion job id:
+  a second click while a pipeline is in flight is a no-op. This reuses the same
+  `enqueueIngestion(..., { force: true })` the sweeper uses.
+- **Retry a failed job** — only a *known* queue and only a job actually in the `failed` state
+  can be retried; queues are infrastructure, so this is an operator action rather than tenant
+  data. Failed jobs are retained (`removeOnFail: false`) specifically so they remain here to
+  retry or inspect.
+
+## Correlation id
+
+A lightweight `requestId` (UUID) is minted at each entry point (upload, email webhook, kb
+query), threaded into the enqueued job data, and included in the structured JSON logs the
+worker already emits. That lets a single request be traced end to end — request → queue → job
+→ outcome — by grepping one id across the web and worker logs, which is the minimum needed to
+debug a distributed pipeline without a full tracing stack.
