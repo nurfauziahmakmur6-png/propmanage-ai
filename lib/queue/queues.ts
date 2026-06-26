@@ -4,10 +4,14 @@ import { redisConnectionOptions } from "./connection";
 export const QUEUE_INGESTION = "document-ingestion";
 export const QUEUE_EMBED = "embed-batch";
 export const QUEUE_MAINTENANCE = "maintenance";
+export const QUEUE_EMAIL = "email-processing";
+export const QUEUE_TRIAGE = "agent-triage";
 
 export const JOB_INGEST = "ingest-document";
 export const JOB_EMBED_BATCH = "embed-batch";
 export const JOB_SWEEP = "sweep-stuck-documents";
+export const JOB_EMAIL = "process-email";
+export const JOB_TRIAGE = "triage-ticket";
 
 // How many chunks each embed-batch child handles. Keeps individual jobs short and lets
 // one failed batch retry without restarting the whole document.
@@ -40,10 +44,24 @@ export interface SweepJobData {
   reason?: string;
 }
 
+export interface EmailJobData {
+  organizationId: string;
+  inboundEmailId: string;
+  messageId: string;
+}
+
+export interface TriageJobData {
+  organizationId: string;
+  ticketId: string;
+  triggeringMessageId: string;
+}
+
 type Queues = {
   ingestion: Queue<IngestionJobData>;
   embed: Queue<EmbedBatchJobData>;
   maintenance: Queue<SweepJobData>;
+  email: Queue<EmailJobData>;
+  triage: Queue<TriageJobData>;
 };
 
 let queues: Queues | null = null;
@@ -55,6 +73,8 @@ export function getQueues(): Queues {
     ingestion: new Queue<IngestionJobData>(QUEUE_INGESTION, { connection }),
     embed: new Queue<EmbedBatchJobData>(QUEUE_EMBED, { connection }),
     maintenance: new Queue<SweepJobData>(QUEUE_MAINTENANCE, { connection }),
+    email: new Queue<EmailJobData>(QUEUE_EMAIL, { connection }),
+    triage: new Queue<TriageJobData>(QUEUE_TRIAGE, { connection }),
   };
   return queues;
 }
@@ -67,6 +87,41 @@ export function ingestionJobId(documentId: string): string {
 
 export function embedBatchJobId(documentId: string, batchIndex: number): string {
   return `embed-batch__${documentId}__${batchIndex}`;
+}
+
+export function emailJobId(organizationId: string, messageId: string): string {
+  return `email-process__${organizationId}__${messageId}`;
+}
+
+export function triageJobId(ticketId: string, triggeringMessageId: string): string {
+  return `agent-triage__${ticketId}__${triggeringMessageId}`;
+}
+
+const STANDARD_JOB_OPTS: JobsOptions = {
+  attempts: MAX_ATTEMPTS,
+  backoff: BACKOFF,
+  removeOnComplete: { age: 24 * 3600 },
+  removeOnFail: false,
+};
+
+// Deterministic id makes a re-delivered email a no-op while one is still queued/processing.
+export async function enqueueEmailProcessing(
+  data: EmailJobData
+): Promise<"enqueued" | "deduped"> {
+  const { email } = getQueues();
+  const jobId = emailJobId(data.organizationId, data.messageId);
+  if (await email.getJob(jobId)) return "deduped";
+  await email.add(JOB_EMAIL, data, { ...STANDARD_JOB_OPTS, jobId });
+  return "enqueued";
+}
+
+// One triage per (ticket, triggering message); a redelivered trigger is a no-op.
+export async function enqueueTriage(data: TriageJobData): Promise<"enqueued" | "deduped"> {
+  const { triage } = getQueues();
+  const jobId = triageJobId(data.ticketId, data.triggeringMessageId);
+  if (await triage.getJob(jobId)) return "deduped";
+  await triage.add(JOB_TRIAGE, data, { ...STANDARD_JOB_OPTS, jobId });
+  return "enqueued";
 }
 
 /**
