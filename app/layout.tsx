@@ -24,6 +24,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <a href="/kb" className="ml-4 hover:text-gray-900">
               Knowledge Base
             </a>
+            <a href="/ops" className="ml-4 hover:text-gray-900">
+              Ops
+            </a>
           </span>
         </nav>
         <main className="max-w-5xl mx-auto px-6 py-8">{children}</main>
