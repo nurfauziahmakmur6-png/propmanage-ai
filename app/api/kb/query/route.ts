@@ -30,6 +30,7 @@ export async function POST(req: Request) {
   const llm: LLMProvider = {
     id: "lazy",
     complete: (opts) => getLLMProvider().complete(opts),
+    chat: (opts) => getLLMProvider().chat(opts),
   };
 
   try {

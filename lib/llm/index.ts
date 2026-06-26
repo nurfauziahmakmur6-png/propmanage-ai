@@ -1,7 +1,16 @@
 import type { LLMProvider } from "./types";
 import { GroqProvider, OpenAIProvider, AnthropicProvider } from "./providers";
 
-export type { LLMProvider, LLMCompletion, LLMCompleteOptions } from "./types";
+export type {
+  LLMProvider,
+  LLMCompletion,
+  LLMCompleteOptions,
+  LLMChatOptions,
+  LLMChatResult,
+  LLMMessage,
+  LLMToolSpec,
+  LLMToolCall,
+} from "./types";
 
 function requireEnv(name: string): string {
   const v = process.env[name];

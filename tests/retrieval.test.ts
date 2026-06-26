@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { reciprocalRankFusion } from "../lib/retrieval/rrf";
 import { composeAnswer, REFUSAL } from "../lib/answer";
 import type { RetrievedChunk } from "../lib/retrieval";
-import type { LLMProvider, LLMCompletion } from "../lib/llm";
+import type { LLMProvider, LLMCompletion, LLMChatResult } from "../lib/llm";
 
 class SpyLLM implements LLMProvider {
   readonly id = "spy";
@@ -10,6 +10,9 @@ class SpyLLM implements LLMProvider {
   async complete(): Promise<LLMCompletion> {
     this.calls++;
     return { text: "The bins go out on Tuesday [1].", model: "spy" };
+  }
+  async chat(): Promise<LLMChatResult> {
+    return { text: null, toolCalls: [], finishReason: "stop" };
   }
 }
 

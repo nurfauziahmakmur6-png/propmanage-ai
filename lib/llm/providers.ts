@@ -1,4 +1,89 @@
-import type { LLMProvider, LLMCompleteOptions, LLMCompletion } from "./types";
+import type {
+  LLMProvider,
+  LLMCompleteOptions,
+  LLMCompletion,
+  LLMChatOptions,
+  LLMChatResult,
+  LLMMessage,
+  LLMToolCall,
+} from "./types";
+
+// Map our provider-neutral messages to the OpenAI chat-completions shape.
+function toOpenAIMessages(messages: LLMMessage[]): unknown[] {
+  return messages.map((m) => {
+    switch (m.role) {
+      case "assistant":
+        return {
+          role: "assistant",
+          content: m.content,
+          ...(m.toolCalls && m.toolCalls.length > 0
+            ? {
+                tool_calls: m.toolCalls.map((tc) => ({
+                  id: tc.id,
+                  type: "function",
+                  function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
+                })),
+              }
+            : {}),
+        };
+      case "tool":
+        return { role: "tool", tool_call_id: m.toolCallId, content: m.content };
+      default:
+        return { role: m.role, content: m.content };
+    }
+  });
+}
+
+async function openAICompatibleChat(
+  baseUrl: string,
+  apiKey: string,
+  model: string,
+  opts: LLMChatOptions
+): Promise<LLMChatResult> {
+  const tools = opts.tools?.map((t) => ({
+    type: "function",
+    function: { name: t.name, description: t.description, parameters: t.parameters },
+  }));
+  const res = await fetch(`${baseUrl}/chat/completions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model,
+      temperature: opts.temperature ?? 0.1,
+      max_tokens: opts.maxTokens ?? 1024,
+      messages: toOpenAIMessages(opts.messages),
+      ...(tools ? { tools, tool_choice: opts.toolChoice ?? "auto" } : {}),
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(`LLM chat failed (${res.status}): ${await res.text()}`);
+  }
+  interface RawToolCall {
+    id: string;
+    function?: { name?: string; arguments?: string };
+  }
+  const data = await res.json();
+  const choice = data.choices?.[0];
+  const rawToolCalls: RawToolCall[] = choice?.message?.tool_calls ?? [];
+  const toolCalls: LLMToolCall[] = rawToolCalls.map((tc) => {
+    let args: Record<string, unknown> = {};
+    try {
+      args = tc.function?.arguments ? JSON.parse(tc.function.arguments) : {};
+    } catch {
+      args = {};
+    }
+    return { id: tc.id, name: tc.function?.name ?? "", arguments: args };
+  });
+  return {
+    text: choice?.message?.content ?? null,
+    toolCalls,
+    finishReason: choice?.finish_reason ?? "stop",
+    usage: {
+      promptTokens: data.usage?.prompt_tokens,
+      completionTokens: data.usage?.completion_tokens,
+    },
+  };
+}
 
 // Groq and OpenAI share the OpenAI chat-completions shape, so one client covers both.
 async function openAICompatibleComplete(
@@ -49,6 +134,9 @@ export class GroqProvider implements LLMProvider {
   complete(opts: LLMCompleteOptions): Promise<LLMCompletion> {
     return openAICompatibleComplete(this.baseUrl, this.apiKey, this.model, opts);
   }
+  chat(opts: LLMChatOptions): Promise<LLMChatResult> {
+    return openAICompatibleChat(this.baseUrl, this.apiKey, this.model, opts);
+  }
 }
 
 export class OpenAIProvider implements LLMProvider {
@@ -62,6 +150,9 @@ export class OpenAIProvider implements LLMProvider {
   }
   complete(opts: LLMCompleteOptions): Promise<LLMCompletion> {
     return openAICompatibleComplete(this.baseUrl, this.apiKey, this.model, opts);
+  }
+  chat(opts: LLMChatOptions): Promise<LLMChatResult> {
+    return openAICompatibleChat(this.baseUrl, this.apiKey, this.model, opts);
   }
 }
 
@@ -101,5 +192,11 @@ export class AnthropicProvider implements LLMProvider {
         completionTokens: data.usage?.output_tokens,
       },
     };
+  }
+  // Anthropic's tool-use API differs from OpenAI's; wire it when swapping the agent to
+  // Claude. The default agent provider is Groq, which is OpenAI-compatible.
+  async chat(_opts: LLMChatOptions): Promise<LLMChatResult> {
+    void _opts;
+    throw new Error("Anthropic tool-calling chat is not implemented; use LLM_PROVIDER=groq");
   }
 }
