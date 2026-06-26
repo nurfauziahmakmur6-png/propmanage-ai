@@ -144,6 +144,9 @@ export const tickets = pgTable(
     category: text("category"), // set by the agent
     source: text("source").notNull().default("web"), // web | email | api
     assignedTo: uuid("assigned_to").references(() => users.id, { onDelete: "set null" }),
+    // Set by escalate_to_human; presence flags the ticket for staff review.
+    escalatedAt: text("escalated_at"),
+    escalationReason: text("escalation_reason"),
     createdAt: text("created_at")
       .notNull()
       .default(sql`now()`),
@@ -182,7 +185,11 @@ export const ticketMessages = pgTable(
       .references(() => organizations.id, { onDelete: "cascade" }),
     authorId: uuid("author_id").references(() => users.id, { onDelete: "set null" }),
     authorRole: text("author_role").notNull().default("staff"), // staff | tenant | agent
+    // sent for posted messages; draft for an AI reply awaiting human approval.
+    status: text("status").notNull().default("sent"), // sent | draft
     body: text("body").notNull(),
+    // Sources backing an AI draft reply: [{ ref, title, page, section, chunkId, score }].
+    citations: jsonb("citations").notNull().default([]),
     createdAt: text("created_at")
       .notNull()
       .default(sql`now()`),
@@ -279,18 +286,29 @@ export const inboundEmails = pgTable(
 // ---------------------------------------------------------------------------
 // agent_runs
 // ---------------------------------------------------------------------------
-export const agentRuns = pgTable("agent_runs", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  organizationId: uuid("organization_id")
-    .notNull()
-    .references(() => organizations.id, { onDelete: "cascade" }),
-  ticketId: uuid("ticket_id").references(() => tickets.id, { onDelete: "set null" }),
-  status: text("status").notNull(), // succeeded | failed | escalated
-  toolCalls: jsonb("tool_calls").notNull().default([]),
-  output: text("output"),
-  tokensUsed: integer("tokens_used"),
-  latencyMs: integer("latency_ms"),
-  createdAt: text("created_at")
-    .notNull()
-    .default(sql`now()`),
-});
+export const agentRuns = pgTable(
+  "agent_runs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    ticketId: uuid("ticket_id").references(() => tickets.id, { onDelete: "set null" }),
+    // The message that triggered this run; lets a retried triage upsert the same log row.
+    triggeringMessageId: uuid("triggering_message_id").references(() => ticketMessages.id, {
+      onDelete: "set null",
+    }),
+    status: text("status").notNull(), // succeeded | failed | escalated
+    toolCalls: jsonb("tool_calls").notNull().default([]),
+    output: text("output"),
+    tokensUsed: integer("tokens_used"),
+    latencyMs: integer("latency_ms"),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`now()`),
+  },
+  (t) => [
+    // Idempotent run logging: one row per (ticket, triggering message) across retries.
+    uniqueIndex("agent_runs_ticket_message_idx").on(t.ticketId, t.triggeringMessageId),
+  ]
+);

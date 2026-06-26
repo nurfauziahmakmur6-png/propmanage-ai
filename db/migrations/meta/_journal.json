@@ -22,6 +22,13 @@
       "when": 1782029889066,
       "tag": "0002_lyrical_vulcan",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1782484929580,
+      "tag": "0003_tan_silverclaw",
+      "breakpoints": true
     }
   ]
 }
