@@ -271,3 +271,67 @@ widens on larger, noisier corpora and on exact-token queries (clause numbers, co
 dense retrieval degrades — the regime this pipeline is built for. The eval is the instrument
 for detecting that, and is meant to be re-run whenever chunking, the embedding model, or
 fusion weights change.
+
+---
+
+# Milestone 4 — Triage Agent + Inbound Email Decisions
+
+## The agent's constrained tool set
+
+The triage agent is deliberately given a *small, fixed* set of tools rather than free rein.
+Each tool is a narrow capability with a typed JSON-Schema signature the model must satisfy:
+
+- `search_knowledge_base(query, scope)` — hybrid+rerank retrieval from M3; returns ranked
+  snippets with titles to cite. `scope: "property"` restricts to the ticket's property.
+- `get_ticket_history()` — prior messages on the ticket, for context.
+- `classify_ticket(category, priority)` — writes the structured fields back.
+- `draft_reply(body, citations)` — stores a **draft** message (`author_role=agent`,
+  `status=draft`); never sent automatically.
+- `escalate_to_human(reason)` — flags the ticket (`escalated_at`, `escalation_reason`).
+
+Constraining the surface area is the safety mechanism: the agent can only read documents,
+read history, label the ticket, draft, or escalate. It cannot send email, change rent, close
+tickets, or take any outward action. The worst case is a bad *draft* that a human discards.
+
+## Human-in-the-loop and escalation guardrails
+
+The agent **drafts; a human approves**. Auto-send is off by default — every AI reply lands
+as a `draft` and only `POST …/messages/:id/approve` (a human action) flips it to `sent`. The
+reviewer can edit the body in the same step.
+
+Sensitive topics — money, rent, deposits, contracts, leases, legal/eviction — must escalate,
+never draft. This is enforced in **two layers**: the system prompt instructs it, and, because
+prompts are not a guarantee, `draft_reply` itself calls `isSensitive(category, tenantText)`
+and, on a match, escalates instead of writing the draft — regardless of what the model
+decided. The test proves the code layer: a mocked LLM that *tries* to draft on a rent/legal
+ticket still results in an escalation and zero draft messages. Sensitivity is detected from
+both the (agent-assigned) category and keyword/regex patterns over the tenant's own text, so
+an unclassified-but-clearly-legal message still escalates.
+
+## Email idempotency
+
+Inbound delivery is at-least-once (a provider retries its webhook), so the pipeline is
+idempotent at three points:
+
+1. **Unique `(organization_id, message_id)`** on `inbound_emails` with an
+   `on conflict do nothing` insert — a redelivered message persists once and the webhook
+   returns `duplicate` without enqueuing.
+2. **Deterministic job ids** — `email-process__{org}__{messageId}` and
+   `agent-triage__{ticketId}__{messageId}` — so a re-enqueue while one is in flight is a
+   no-op.
+3. **`inbound_emails.ticket_id` as a processed-marker** — `processInboundEmail` returns early
+   if the row already has a ticket, so even if the job runs twice it creates exactly one
+   ticket. The agent run upserts on `(ticket_id, triggering_message_id)`, and a re-triage
+   clears prior drafts first, so retries never duplicate drafts or run-logs.
+
+## How agent_runs gives observability
+
+Every triage run upserts one `agent_runs` row keyed on `(ticket_id, triggering_message_id)`:
+its `status` (succeeded | escalated | failed), the ordered `tool_calls` (name + arguments +
+result) as JSONB, `tokens_used`, and `latency_ms`. This makes each AI decision auditable
+(which documents it cited, what it classified, why it escalated) and makes cost and latency
+first-class, measurable metrics — `tokens_used` is the main variable cost of the system. The
+ticket view surfaces a compact trace (tools → latency → tokens → status); the Milestone 5 ops
+view will aggregate the same rows. In the live demo a routine question ran
+`search_knowledge_base → classify_ticket → draft_reply` in ~2.9s / ~1019 tokens, while a
+rent/legal message escalated in ~0.6s having called only `escalate_to_human`.
